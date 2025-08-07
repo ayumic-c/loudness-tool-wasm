@@ -164,7 +164,7 @@ function App() {
       <div className="lg_container">
         <h1 className="leading-none text-2xl font-bold text-center text-[#9375FF] lg:text-4xl">
           <FontAwesomeIcon icon="fa-solid fa-compact-disc" />
-          ラウドネス処理ツール（数十秒音源向け）
+          ラウドネス処理ツール<br className="md:hidden" />（数十秒音源向け）
         </h1>
         <p className="mt-5 mb-6 lg:mt-7 lg:mb-8">
           <strong>注意事項：</strong>
