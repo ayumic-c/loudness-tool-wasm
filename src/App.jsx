@@ -40,12 +40,18 @@ function App() {
 
   // 初回マウント時にプリロード
   useEffect(() => {
+    let isMounted = true;
+
     (async () => {
       if (!isFFmpegLoaded) {
         await ffmpeg.load();
-        isFFmpegLoaded = true;
+        if (isMounted) isFFmpegLoaded = true;
       }
     })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // ダウンロード処理
@@ -60,9 +66,19 @@ function App() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) return alert("音声ファイルを選択してください。");
-
+    
+    // 処理開始
     setLoading(true);
+
+    let inputFileName = "";
+    let outputFileName = "";
+
     try {
+      // タイムスタンプ付きファイル名を定義
+      const timestamp = Date.now();
+      inputFileName = `input_${timestamp}.mp3`;
+      outputFileName = `output_${timestamp}.mp3`;
+
       // ffmpegロード確認
       if (!isFFmpegLoaded) {
         await ffmpeg.load();
@@ -78,10 +94,10 @@ function App() {
       });
 
       // 入力ファイルを仮想FSに書き込み
-      ffmpeg.FS("writeFile", "input.mp3", await fetchFile(file));
+      ffmpeg.FS("writeFile", inputFileName, await fetchFile(file));
 
       // === 1パス目：解析 ===
-      await ffmpeg.run("-i", "input.mp3", "-af", `loudnorm=I=${loudness}:TP=${peak}:print_format=json`, "-f", "null", "-");
+      await ffmpeg.run("-i", inputFileName, "-af", `loudnorm=I=${loudness}:TP=${peak}:print_format=json`, "-f", "null", "-");
 
       // JSON抽出
       const analyzeLog = ffmpegLogs.join("\n");
@@ -108,10 +124,10 @@ function App() {
       // === 2パス目：正規化（直接 input.mp3 → output.mp3）===
       const filterCmd = `loudnorm=I=${loudness}:TP=${peak}:LRA=11:measured_I=${measuredI}:measured_LRA=${measuredLRA}:measured_TP=${measuredTP}:measured_thresh=${measuredThresh}:offset=${offset}`;
 
-      await ffmpeg.run("-i", "input.mp3", "-af", filterCmd, "-ar", `${sampleRate}`, "-b:a", `${bitrate}k`, "-ac", `${channel === "mono" ? 1 : 2}`, "output.mp3");
+      await ffmpeg.run("-i", inputFileName, "-af", filterCmd, "-ar", `${sampleRate}`, "-b:a", `${bitrate}k`, "-ac", `${channel === "mono" ? 1 : 2}`, outputFileName);
 
       // === 再解析（処理後LUFS測定） ===
-      await ffmpeg.run("-i", "output.mp3", "-af", `loudnorm=I=${loudness}:TP=${peak}:print_format=json`, "-f", "null", "-");
+      await ffmpeg.run("-i", outputFileName, "-af", `loudnorm=I=${loudness}:TP=${peak}:print_format=json`, "-f", "null", "-");
 
       const finalLog = ffmpegLogs.join("\n");
       const jsonMatch2 = finalLog.match(/{[\s\S]*}/);
@@ -125,12 +141,13 @@ function App() {
       }
 
       // 出力ファイル取得
-      const data = ffmpeg.FS("readFile", "output.mp3");
+      const data = ffmpeg.FS("readFile", outputFileName);
       const blob = new Blob([data.buffer], { type: "audio/mp3" });
       const fileBase64 = URL.createObjectURL(blob);
 
       // ファイル名生成
-      const finalName = `${prefix ? prefix + "_" : ""}${file.name.replace(/\.[^/.]+$/, "")}${suffix ? "_" + suffix : ""}.mp3`;
+      const rawFileName = file?.name ?? "output";
+      const finalName = `${prefix ? prefix + "_" : ""}${rawFileName.replace(/\.[^/.]+$/, "")}${suffix ? "_" + suffix : ""}.mp3`;
 
       // 結果追加
       setResults((prev) => [
@@ -156,6 +173,13 @@ function App() {
       alert(`エラー: ${err.message}`);
     } finally {
       setLoading(false);
+
+      try {
+        if (inputFileName) ffmpeg.FS("unlink", inputFileName);
+        if (outputFileName) ffmpeg.FS("unlink", outputFileName);
+      } catch (cleanupErr) {
+        console.warn("ファイル削除エラー", cleanupErr);
+      }
     }
   };
 
@@ -164,7 +188,7 @@ function App() {
       <div className="lg_container">
         <h1 className="leading-none text-2xl font-bold text-center text-[#9375FF] lg:text-4xl">
           <FontAwesomeIcon icon="fa-solid fa-compact-disc" />
-          ラウドネス処理ツール<br className="md:hidden" />（数十秒音源向け）
+          ラウドネス処理ツール『Loudy』
         </h1>
         <p className="mt-5 mb-6 lg:mt-7 lg:mb-8">
           <strong>注意事項：</strong>
@@ -200,12 +224,12 @@ function App() {
         <div className="flex flex-col space-y-6 md:flex-row md:gap-4 md:space-y-0">
           <div className="md:w-1/2">
             <label className="block mb-1">▼ラウドネス（LUFS）</label>
-            <input type="number" className="form-box" value={loudness} onChange={(e) => setLoudness(e.target.value)} />
+            <input type="number" className="form-box" value={loudness} onChange={(e) => setLoudness(Number(e.target.value))} />
           </div>
 
           <div className="md:w-1/2">
             <label className="block mb-1">▼トゥルーピーク（dBTP）</label>
-            <input type="number" className="form-box" value={peak} onChange={(e) => setPeak(e.target.value)} />
+            <input type="number" className="form-box" value={peak} onChange={(e) => setPeak(Number(e.target.value))} />
           </div>
         </div>
 
@@ -213,7 +237,7 @@ function App() {
         <div className="flex flex-col space-y-6 md:flex-row md:gap-4 md:space-y-0">
           <div className="md:w-1/3">
             <label className="block mb-1">▼サンプリング周波数</label>
-            <select className="form-box cursor-pointer" value={sampleRate} onChange={(e) => setSampleRate(e.target.value)}>
+            <select className="form-box cursor-pointer" value={sampleRate} onChange={(e) => setSampleRate(Number(e.target.value))}>
               {[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000].map((rate) => (
                 <option key={rate} value={rate}>
                   {rate}Hz
@@ -224,7 +248,7 @@ function App() {
 
           <div className="md:w-1/3">
             <label className="block mb-1">▼ビットレート</label>
-            <select className="form-box cursor-pointer" value={bitrate} onChange={(e) => setBitrate(e.target.value)}>
+            <select className="form-box cursor-pointer" value={bitrate} onChange={(e) => setBitrate(Number(e.target.value))}>
               {[64, 96, 128, 160, 192, 256, 320].map((br) => (
                 <option key={br} value={br}>
                   {br}kbps
